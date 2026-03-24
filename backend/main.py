@@ -10,9 +10,8 @@ from routers import profile, recommend, feedback
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create database tables on startup."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Database is initialized via manual scripts directly to the Session Pooler.
+    # We do not run create_all here to prevent deadlocks on PgBouncer Transaction Poolers.
     yield
 
 
