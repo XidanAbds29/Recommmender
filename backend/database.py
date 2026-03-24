@@ -8,21 +8,29 @@ from sqlalchemy.orm import DeclarativeBase
 load_dotenv()
 
 # Prioritise SUPABASE_URL if provided, else fallback to local SQLite for development
-# Supabase URL format: postgresql+asyncpg://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
-
 _db_url = os.getenv("SUPABASE_URL") or os.getenv("DATABASE_URL")
-if not _db_url:
+
+if _db_url:
+    # Ensure it uses the psycopg driver for Supabase pooler compatibility
+    if _db_url.startswith("postgresql://"):
+        _db_url = _db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    elif _db_url.startswith("postgresql+asyncpg://"):
+        _db_url = _db_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+else:
     _db_url = "sqlite+aiosqlite:///recommender.db"
 
 # Engine configuration
-# Supabase often requires SSL disable or specific pooling depending on the connection string
 connect_args = {}
+# For psycopg, standard sslmode parameter is preferred if hitting external db
 if "sqlite" not in _db_url:
-    # Basic settings to help connect to external PostgreSQL smoothly
-    # We disable prepared_statement_cache_size so Supabase Transaction Pooler works
-    connect_args = {"ssl": "require", "prepared_statement_cache_size": 0}
+    connect_args = {"sslmode": "require"}
 
-engine = create_async_engine(_db_url, echo=False, connect_args=connect_args if "sqlite" not in _db_url else {})
+engine = create_async_engine(
+    _db_url, 
+    echo=False, 
+    connect_args=connect_args,
+    pool_pre_ping=True  # Recommended for PgBouncer/Supabase
+)
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
