@@ -4,12 +4,14 @@ Recommender Engine — weighted random selection with Chaos Factor.
 Algorithm:
 1. Fetch user's genre prefs & feedback history
 2. Build candidate pool from TMDB (movies/tv) + Jikan (anime) concurrently
-3. Filter out already-feedbacked items
-4. Score each candidate with weighted formula
-5. Roll chaos factor — if triggered, pick from outside user genres
-6. Weighted random selection from scored pool
+3. Deduplicate franchises (group "Part 1/2", seasons, sequels)
+4. Filter out already-feedbacked items
+5. Score each candidate with weighted formula
+6. Roll chaos factor — if triggered, pick from outside user genres
+7. Weighted random selection from scored pool
 """
 
+import re
 import random
 import asyncio
 from sqlalchemy import select
@@ -18,6 +20,45 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models import GenrePreference, SeedTitle, Preference, Feedback
 from services import tmdb, jikan, rt_scraper
 from schemas import RecommendationOut
+
+
+# ── Franchise Deduplication ───────────────────────────────────────────────────
+
+_SEQUEL_PATTERN = re.compile(
+    r"""
+    \s*[:\-–—]\s*(?:part|chapter|volume|book|act)\s*\d+.*$|  # ": Part 2"
+    \s*\(?(?:part|chapter|volume)\s*\d+\)?.*$|               # "(Part 1)"
+    \s*(?:season|series)\s*\d+.*$|                           # "Season 3"
+    \s*\d+(?:st|nd|rd|th)\s+season.*$|                       # "2nd Season"
+    \s*(?:II|III|IV|V|VI|VII|VIII|IX|X)(?:\s|$).*$|          # Roman numerals
+    \s+\d{1,2}$                                               # trailing number "3"
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _normalize_title(title: str) -> str:
+    """Strip sequel/season/part suffixes to get the core franchise name."""
+    cleaned = _SEQUEL_PATTERN.sub("", title).strip()
+    # If stripping removed everything, keep original
+    return cleaned if cleaned else title
+
+
+def _deduplicate_candidates(candidates: list[dict]) -> list[dict]:
+    """Group candidates by franchise name and keep the highest-scored entry."""
+    groups: dict[str, dict] = {}
+    for c in candidates:
+        key = _normalize_title(c["title"]).lower()
+        existing = groups.get(key)
+        if existing is None:
+            groups[key] = c
+        else:
+            # Keep the one with a higher score
+            new_score = (c.get("tmdb_score") or 0) + (c.get("mal_score") or 0)
+            old_score = (existing.get("tmdb_score") or 0) + (existing.get("mal_score") or 0)
+            if new_score > old_score:
+                groups[key] = c
+    return list(groups.values())
 
 
 async def _fetch_tmdb_candidates(mt: str, genre_ids: list[int], page: int, excluded_ids: set[str]) -> list[dict]:
@@ -160,6 +201,9 @@ async def get_recommendation(
     for res in results:
         if isinstance(res, list):
             candidates.extend(res)
+
+    # ── 3b. Deduplicate franchises ────────────────────────────────────────
+    candidates = _deduplicate_candidates(candidates)
 
     if not candidates:
         return RecommendationOut(
