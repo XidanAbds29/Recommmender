@@ -1,8 +1,13 @@
 /**
  * Recommender API client — typed wrappers around all backend endpoints.
+ * In production, requests go through Next.js rewrites (relative URLs).
+ * In development, requests hit localhost:8000 directly.
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE =
+    typeof window !== "undefined" && window.location.hostname !== "localhost"
+        ? ""
+        : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
